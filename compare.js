@@ -2,8 +2,8 @@
 var _ = require('lodash')
 var xml2js = require('xml2js')
 var fs = require('fs')
-var originalXML = fs.readFileSync(__dirname + '/files/01_BZ_ME_V2.exb').toString()
-var orthographicXML = fs.readFileSync(__dirname + '/files/ortho/01_BZ_ME_V2.fln').toString()
+var originalXML = fs.readFileSync(__dirname + '/data/original/01_LE_V2.exb').toString()
+var orthographicXML = fs.readFileSync(__dirname + '/data/ortho/01_LE_V2.fln').toString()
 var db = require('./dao/tokens')
 
 var log = (obj, len = 100) => {
