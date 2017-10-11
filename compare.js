@@ -1,19 +1,23 @@
 
-var _ = require('lodash')
-var xml2js = require('xml2js')
-var fs = require('fs')
-var originalXML = fs.readFileSync(__dirname + '/data/original/01_LE_V2.exb').toString()
-var orthographicXML = fs.readFileSync(__dirname + '/data/ortho/01_LE_V2.fln').toString()
-var db = require('./dao/tokens')
+const _ = require('lodash')
+const xml2js = require('xml2js')
+const fs = require('fs')
+const originalXML = fs.readFileSync(__dirname + '/data/original/01_LE_V2.exb').toString()
+const orthographicXML = fs.readFileSync(__dirname + '/data/ortho/01_LE_V2.fln').toString()
+const db = require('./dao/tokens')
 
-var log = (obj, len = 100) => {
-  return require('util').inspect(obj, {
+process.on('unhandledRejection', (err, promise) => {
+  console.log(err, promise)
+})
+
+const log = (obj, len = 100) => {
+  return console.log(require('util').inspect(obj, {
     depth          : null,
     maxArrayLength : len
-  })
+  }))
 }
 
-var x = new xml2js.Parser({
+const x = new xml2js.Parser({
   explicitArray         : false,
   preserveChildrenOrder : true,
   mergeAttrs            : false,
@@ -22,7 +26,7 @@ var x = new xml2js.Parser({
 
 // console.log('x',x)
 
-var parseXML = (string) => {
+const parseXML = (string) => {
   return new Promise((resolve, reject) => {
     x.parseString(string, (err, res) => {
       if (err == null) {
@@ -34,9 +38,9 @@ var parseXML = (string) => {
   })
 }
 
-var clone = (obj) => JSON.parse(JSON.stringify(obj))
+const clone = obj => JSON.parse(JSON.stringify(obj))
 
-var isWordToken = (t) => {
+const isWordToken = t => {
   return t.text  != '.'
     && t.text    != ','
     && t.text[0] != ','
@@ -46,7 +50,7 @@ var isWordToken = (t) => {
     && !t.fragment_of
 }
 
-var tokenizeFragment = (sentence_fragment) => {
+const tokenizeFragment = sentence_fragment => {
   // TODO: THIS IS IMPROPPER
   return sentence_fragment
     .split('.')
@@ -69,11 +73,45 @@ Promise.all([
 ])
 .then(([original, orthographic]) => {
 
-  var cs = _(orthographic['folker-transcription'].$$).filter({'#name' : 'contribution'}).value()
+  var ortho_timeline_by_timepoint = _(orthographic['folker-transcription'].$$)
+    .chain()
+    .filter({'#name' : 'timeline'})
+    .first()
+    .get('$$')
+    .groupBy(x => x.$['timepoint-id'])
+    .mapValues(x => x[0].$['absolute-time'])
+    .value()
+
+  var cs = _(orthographic['folker-transcription'].$$)
+    .chain()
+    .filter({'#name' : 'contribution'})
+    .map(x => {
+      // add absolute time to contribution
+      x.$._startTimepoint = ortho_timeline_by_timepoint[x.$['start-reference']]
+      x.$._endTimepoint = ortho_timeline_by_timepoint[x.$['end-reference']]
+      x.$$ = _(x.$$)
+        .map(x => {
+          // add absolute time to time-markers inside contributions
+          if (x['#name'] == 'time') {
+            x.$._timepoint = ortho_timeline_by_timepoint[x.$['timepoint-reference']]
+          }
+          return x
+        })
+        .value()
+      return x
+    })
+    .value()
 
   var cs_by_start_reference_and_speaker = _(cs).groupBy((c) => {
-    return `${c.$['speaker-reference']}-${c.$['start-reference']}`
+    return `${c.$['speaker-reference']}-${c.$['_start-reference']}`
   }).value()
+
+  var cs_by_start_timepoint_and_speaker = _(cs).groupBy((c) => {
+    return `${c.$['speaker-reference']}-${c.$['_startTimepoint']}`
+  }).value()
+
+  // log(cs_by_start_reference_and_speaker)
+  // process.exit()
 
   var cs_by_speaker = _(cs).groupBy((c) => {
     return `${c.$['speaker-reference']}`
@@ -84,35 +122,42 @@ Promise.all([
 
   var tiers = tiers_with_comments.filter(t => t.$.category != 'c')
 
-  var parseEvent = (e, l, i, carry_over = null) => {
+  var parseEvent = (e, l, i) => {
     e.tokens = tokenizeFragment(e._)
-    e.tokens = e.tokens.map((t, ti) => {
+    e.tokens = _(e.tokens).map((t, ti) => {
+      if (t.fragment_of) {
+        console.log('t fragment_of',t);
+      }
       return {
-        text  : t,
-        start : ti == 0 ? e.$.start : null,
-        end   : ti+1 == e.tokens.length ? e.$.end : null
+        text            : t,
+        start           : ti == 0 ? e.$.start : null,
+        _startTimepoint : ti == 0 && e.$.start ? ortho_timeline_by_timepoint[`TLI_${Number(e.$.start.substr(1))}`] : null,
+        _endTimepoint   : ti+1 == e.tokens.length && e.$.end ? ortho_timeline_by_timepoint[`TLI_${Number(e.$.end.substr(1))}`] : null,
+        end             : ti+1 == e.tokens.length ? e.$.end : null,
+        fragment_of     : t.fragment_of !== null ? t.fragment_of : null
       }
     })
-    if (carry_over) {
-      console.log('carry_over, e._', carry_over, e.tokens)
-    }
-
-  // it’s an uninterrupted event => return
+    .value()
+    // it’s an uninterrupted event => return
     if (e._.slice(-1) === ' '){
       return clone(e)
 
-  // it’s interrupted (i.e. the last word is incomplete)
-  // => descend into next event, and apend its text
-  // to the current token text
+    // it’s interrupted (i.e. the last word is incomplete)
+    // => descend into next event, and apend its text
+    // to the current token text
     }else{
-      // console.log('tokens', e.tokens)
+      // console.log('interrupted', l[i])
       e.tokens = e.tokens.map((token, ti) => {
+        // console.log('ti+1',ti+1,'interrupted', e.tokens.length, e.tokens, 'l[i+1]',l[i+1])
+        // the last event token
         if (ti+1 == e.tokens.length) {
+          // console.log('hello')
           var next           = parseEvent(l[i+1], l, i+1)
           l[i+1].skip_first  = true
           // console.log('next first token', next.tokens[0])
           e.next_token       = next
-          l[i+1].fragment_of = i
+          l[i+1].tokens[0].fragment_of = i
+          console.log('l[i+1].tokens[0].fragment_of',l[i+1].tokens[0].fragment_of);
           token.text         = token.text + next.tokens[0].text
           return token
         }else{
@@ -123,8 +168,7 @@ Promise.all([
     }
   }
 
-
-  var orthographic_words_only = _(cs_by_speaker.BZ).reduce((m,e,i,l) => {
+  var orthographic_words_only = _(cs_by_speaker.MF).reduce((m,e,i,l) => {
     return m.concat(e.w)
   }, [])
 
@@ -141,15 +185,17 @@ Promise.all([
   var ti = 0 // token index
   var tokens = _(events_1).reduce((m, e, i, l) => {
     return m.concat(_(e.tokens).map((t,j) => {
-      var ortho = t.start ? (cs_by_start_reference_and_speaker[`BZ-TLI_${Number(t.start.substring(1))-1}`] || null) : null
+      var ortho = t._startTimepoint ? cs_by_start_timepoint_and_speaker[`MF-${t._startTimepoint}`] : null
       return {
-        fragment_of : e.fragment_of && j == 0 ? ti : null,
-        token_id    : ti+=1,
-        event_id    : i,
-        text        : t.text,
-        start       : t.start,
-        end         : t.end,
-        ortho       : ortho,
+        fragment_of     : t.fragment_of && j == 0 ? ti : null,
+        token_id        : ti+=1,
+        event_id        : i,
+        text            : t.text,
+        start           : t.start,
+        end             : t.end,
+        _startTimepoint : t._startTimepoint,
+        _endTimepoint   : t._endTimepoint,
+        ortho           : ortho,
         // ortho_by_timepoints : ortho && _(ortho[0].$$).reduce((m,e,i,l) => {
         //   return m.concat((() => {
         //     if (e.$ && e.$['timepoint-reference']) {
@@ -170,7 +216,7 @@ Promise.all([
   // that only contains the set of tokens
   // that is also in the orthographic translation
   // => downside: any differences in tokenization
-  // lead to a will have more consequential errors
+  // lead to a will have more subsequent errors
 
   var word_tokens_with_normalized_spelling = _(tokens_words_only).map((token, i) => {
     token.ortho_by_index = orthographic_words_only[i]
@@ -208,7 +254,7 @@ Promise.all([
       normalized             : t.normalized,
       is_assimilated         : t.is_assimilated,
       original_changed       : t.original_changed || null,
-      // ortho                  : t.ortho,
+      ortho                  : t.ortho,
       ortho_by_index         : (t.ortho_by_index ? t.ortho_by_index._ : null),
       ortho_by_index_changed : (t.ortho_by_index ? t.ortho_by_index._ != t.text : null)
     }))
@@ -218,16 +264,13 @@ Promise.all([
 
   // console.log('original_words_only', tokens_words_only)
   // console.log('orthographic_words_only', orthographic_words_only)
-  console.log('tokens', log(_(tokens).groupBy('event_id').value()))
+  console.log('tokens:');
+  log(word_tokens_with_normalized_spelling)
   // console.log('all_tokens_with_normalized_spelling', log(all_tokens_with_normalized_spelling, 1950))
   // console.log('cs_by_start_reference_and_speaker', log(cs_by_start_reference_and_speaker))
   // db.insertTokens(all_tokens_with_normalized_spelling)
-  fs.writeFileSync('./log-orthographic.txt', JSON.stringify(orthographic, undefined, 2))
-  fs.writeFileSync('./log-original.txt', JSON.stringify(original, undefined, 2))
+  // fs.writeFileSync('./log-orthographic.txt', JSON.stringify(orthographic, undefined, 2))
+  // fs.writeFileSync('./log-original.txt', JSON.stringify(original, undefined, 2))
   // console.log(require('util').inspect(orthographic['folker-transcription'].timeline, { depth: null }));
   console.log('done')
-})
-
-process.on('unhandledRejection', (err, promise) => {
-  console.log(err, promise)
 })
