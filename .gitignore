@@ -7,7 +7,7 @@ yarn-error.log*
 
 # Private Data
 data/*/
-
+db/*
 # Runtime data
 pids
 *.pid

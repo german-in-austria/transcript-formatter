@@ -40,10 +40,16 @@ const parseXML = (string) => {
   })
 }
 
-const clone = obj => JSON.parse(JSON.stringify(obj))
+const clone = obj => {
+  if (obj !== undefined) {
+    return JSON.parse(JSON.stringify(obj))
+  }else{
+    return undefined
+  }
+}
 
 const isWordToken = t => {
-  return t.text  != '.'
+  return t.text    != '.'
     && t.text    != ','
     && t.text[0] != ','
     && t.text    != '?'
@@ -63,6 +69,35 @@ const tokenizeFragment = sentence_fragment => {
     .filter(t => t != '')
 }
 
+const TOKEN_TYPES = {
+  unknown : {
+    id : 1
+  },
+  delimitier : {
+    regex : /(\?|\.|\!|\,)/,
+    id : 2
+  },
+  pause : {
+    id : 3,
+    regex : /\[[\s\S]{1,}s\]/g
+  },
+  propper_name : {
+    id : 4,
+    regex : /\{.{1,}\}/
+  }
+}
+
+const getTokenTypeFromToken = (text:string):number => {
+  if(text.match(TOKEN_TYPES.pause.regex) !== null){
+    return TOKEN_TYPES.pause.id
+  } else if (text.match(TOKEN_TYPES.delimitier.regex) !== null) {
+    return TOKEN_TYPES.delimitier.id
+  } else if(text.match(TOKEN_TYPES.propper_name.regex) !== null){
+    return TOKEN_TYPES.propper_name.id
+  }else{
+    return TOKEN_TYPES.unknown.id
+  }
+}
 
 const getContributionsBySpeakerAndStartTime = orthographic_transcript => {
 
@@ -134,16 +169,59 @@ const getTiers = original => {
   return tiers
 }
 
+const markFragmentsInTokens = tokens => {
+  return _(tokens).map((e,i) => {
+    if (true) {
+
+    }
+  }).value()
+}
+
 // START
 
 const fnames = [
-  '01_LE_V2'
+  '01_LE_V2',
+  '09_MH_V2',
+  '17_CR_V2',
+  '25_IK_V2.fln',
+  '02_BZ_V2',
+  '10_LE3_V2',
+  '18_ST_V2',
+  '26_KT_V2',
+  '03_ME_V2',
+  '11_AB_V2',
+  '19_PI_V2',
+  '27_AP_V2',
+  '04_LE2_V2',
+  '12_WS_V2',
+  '20_MH2_V2',
+  '28_CT_V2',
+  '05_AG_V2',
+  '13_MS_V1',
+  '21_SV_V2',
+  '29_AP2_V2',
+  '06_MK_V2',
+  '14_JN_V2',
+  '22_HK_V2',
+  '30_DS_V2',
+  '07_MU_V2_kopie',
+  '15_MP_V2',
+  '23_KL_V2',
+  '31_AF_V2',
+  '08_EE_V2',
+  '16_KK_V2',
+  '24_DH_V2',
+  '32_AS_V2'
 ]
 
 _(fnames).each((fname) => {
-  const originalXML     = fs.readFileSync(__dirname + `/data/original/${fname}.exb`).toString()
-  const orthographicXML = fs.readFileSync(__dirname + `/data/ortho/${fname}.fln`).toString()
-
+  var originalXML, orthographicXML
+  try{
+    originalXML     = fs.readFileSync(__dirname + `/data/original/${fname}.exb`).toString()
+    orthographicXML = fs.readFileSync(__dirname + `/data/ortho/${fname}.fln`).toString()
+  }catch(e){
+    return
+  }
   return Promise.all([
     parseXML(originalXML),
     parseXML(orthographicXML)
@@ -159,18 +237,16 @@ _(fnames).each((fname) => {
     var parseEvent = (e, l, i, fragment_of = null) => {
       // not parsed yet:
       if (!e.tokens) {
-        e.event_text = clone(e._)
+        e.event_text = e._ ? clone(e._) : null
         e.tli_start  = e.$.start
         e.tli_end    = e.$.end
-        e.tokens     = tokenizeFragment(e.event_text)
+        e.tokens     = e.event_text ? tokenizeFragment(e.event_text) : []
         e.tokens     = _(e.tokens).map((t:any, ti:number) => {
           return {
             text           : t,
             startTimepoint : ti == 0 && e.$.start ? originalTimelineByTLI[e.$.start] : null,
             endTimepoint   : ti+1 == e.tokens.length && e.$.end ? originalTimelineByTLI[e.$.end] : null,
             fragment_of    : ti == 0 && fragment_of !== null ? fragment_of : null,
-            // start           : ti == 0 ? e.$.start : null,
-            // end             : ti+1 == e.tokens.length ? e.$.end : null,
           }
         })
         .value()
@@ -184,7 +260,7 @@ _(fnames).each((fname) => {
 
       // the event ends with a whitespace => the last token is not interrupted/split between events
       // => return tokenized event
-      if (e.event_text.slice(-1) === ' '){
+      if (e.event_text && e.event_text.slice(-1) === ' '){
         return clone(e)
 
       // it’s interrupted (i.e. the last word is incomplete)
@@ -227,11 +303,19 @@ _(fnames).each((fname) => {
 
       var orthoContribList = orthoBySpeakerAndStartTime[`${speakerShorthand}-${startTimepoint}`]
       var orthoContrib = orthoContribList && orthoContribList.length ? orthoContribList : []
-      return orthoContrib ? _(orthoContrib)
-        // .map((token:any) => {
-        //   return token.$.n
-        // })
-        .value() : null
+      return orthoContrib || null
+    }
+
+    type token = {
+      text : any,
+      ortho : string | null,
+      speaker : string,
+      fragment_of : number | null | undefined,
+      token_id: number,
+      event_id: number,
+      startTimepoint: string | null | undefined,
+      endTimepoint:string | null | undefined,
+      token_type_id: number
     }
 
     var speakersWithEventsWithTokens = _(originalEventTokensBySpeaker).map((speaker, speakerIndex) => {
@@ -239,6 +323,7 @@ _(fnames).each((fname) => {
       var tokenIndex = 0
       return _(speaker.events).map((event:any, eventIndex) => {
         const eventOrthographicContributionWords = event.tokens[0] ? findOrthographicContributionWords(speakerShorthand, event.tokens[0].startTimepoint) : []
+        var nonWordTokenIndex = 0
         return _(event.tokens).map((t:any, eventTokenIndex) => {
           var ortho = t.startTimepoint ? orthoBySpeakerAndStartTime[`${speakerShorthand}-${t.startTimepoint}`] : null
           return {
@@ -246,14 +331,22 @@ _(fnames).each((fname) => {
             speaker         : speakerShorthand,
             text            : t.text,
             ortho           : (() => {
-              if(t.text !== undefined && isWordToken(t)){
-                const orthoAtIndex = eventOrthographicContributionWords[eventTokenIndex]
-                if (orthoAtIndex && orthoAtIndex.$) {
-                  // log discrepancies
-                  if (orthoAtIndex._ != t.text) {
-                    console.error('disconnect', orthoAtIndex._, t.text, tokenIndex +1 , speakerShorthand)
+              if(t.text !== undefined){
+                if (getTokenTypeFromToken(t.text) == TOKEN_TYPES.delimitier.id) {
+                  // console.log('non word token', t.text)
+                  nonWordTokenIndex++
+                }
+                if (isWordToken(t)) {
+                  const orthoAtIndex = eventOrthographicContributionWords[eventTokenIndex-nonWordTokenIndex]
+                  if (orthoAtIndex && orthoAtIndex.$) {
+                    // log discrepancies
+                    if (orthoAtIndex._ != t.text) {
+                      console.error('disconnect', t.text, orthoAtIndex._, '\neventTokenIndex', eventTokenIndex, 'nonWordTokenIndex', nonWordTokenIndex, 'orthoAtIndex._', tokenIndex +1 , speakerShorthand, eventOrthographicContributionWords.map(x => x._), event.tokens.map(x => x.text))
+                    }
+                    return orthoAtIndex.$.n
+                  }else{
+                    return null
                   }
-                  return orthoAtIndex.$.n
                 }else{
                   return null
                 }
@@ -261,27 +354,30 @@ _(fnames).each((fname) => {
                 return null
               }
             })(),
-            fragment_of     : t.fragment_of && eventTokenIndex == 0 ? tokenIndex : null,
-            event_id        : eventIndex,
+            fragment_of      : t.fragment_of !== null ? tokenIndex - 1 : null,
+            event_id         : eventIndex,
             start_timepoint  : t.startTimepoint,
             end_timepoint    : t.endTimepoint,
+            transcript_name  : fname,
+            token_type_id    : getTokenTypeFromToken(t.text)
             // orthographicContributionWords : eventOrthographicContributionWords,
           }
         }).value()
       }).value()
     })
-    .flattenDeep()
     .value()
 
     // var [tokens_words_only, tokens_non_words] = clone(_.partition(tokens, isWordToken))
     // log(orthoBySpeakerAndStartTime)
     log(speakersWithEventsWithTokens)
 
-    dao.writeTokens(speakersWithEventsWithTokens)
+    dao.writeTokens(_(speakersWithEventsWithTokens).flattenDeep().value())
 
-    fs.writeFileSync(`./data/output/${fname}.csv`, speakersWithEventsWithTokens.map((x) => {
-      return _(x).toArray().value().join(',')
-    }).join('\n'))
+    // fs.writeFileSync(`./data/output/${fname}.csv`, speakersWithEventsWithTokens.map((x) => {
+    //   return _(x).toArray().value().join(',')
+    // }).join('\n'))
+    //
+    fs.writeFileSync(`./data/output/${fname}.json`, JSON.stringify(speakersWithEventsWithTokens, null, 4))
 
     return speakersWithEventsWithTokens
 
