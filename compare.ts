@@ -6,6 +6,7 @@ import * as _      from 'lodash'
 import * as xml2js from 'xml2js'
 import * as fs     from 'fs'
 import * as util   from 'util'
+import * as path   from 'path'
 
 import dao         from './dao/tokens'
 
@@ -21,6 +22,18 @@ const log = (obj, len = 100) => {
   }))
 }
 
+const sanitizeXMLString = (string) => {
+  return string
+    .split('/<').join('/ <')
+    .split(',<').join(', <')
+    .split('?<').join('? <')
+    .split('.<').join('. <')
+    .split(')<').join(') <')
+    .split(']<').join('] <')
+    .split('][').join('] [')
+    .split(')[').join(') [')
+}
+
 const parser = new xml2js.Parser({
   explicitArray         : false,
   preserveChildrenOrder : true,
@@ -29,8 +42,9 @@ const parser = new xml2js.Parser({
 })
 
 const parseXML = (string) => {
+  var fixed = sanitizeXMLString(string)
   return new Promise((resolve, reject) => {
-    parser.parseString(string, (err, res) => {
+    parser.parseString(fixed, (err, res) => {
       if (err == null) {
         resolve(res)
       }else{
@@ -58,13 +72,19 @@ const isWordToken = t => {
     && !t.fragment_of
 }
 
-const tokenizeFragment = sentence_fragment => {
-  // TODO: THIS IS IMPROPPER
+const tokenizeFragment = (sentence_fragment) => {
   return sentence_fragment
     .split('.').join(' .')
     .split(', ').join(' , ')
-    .split('-').join(' ') // tokens from assimilations
+    // tokens from assimilations
+    .split('-').join(' ')
     .split('? ').join(' ? ')
+    // corrects mistakes where transcribers didn’t
+    // put a space after the comma *within* an event.
+    .split(/(?=\D\b)(,)(?=\b\D)/).filter(x => x !== ',').join(', ')
+    // corrects mistakes where transcribers didn’t
+    // put a space after the comma *at the end* of an event.
+    .split(/,$/).join(', ')
     .split(' ')
     .filter(t => t != '')
 }
@@ -81,9 +101,13 @@ const TOKEN_TYPES = {
     id : 3,
     regex : /\[[\s\S]{1,}s\]/g
   },
-  propper_name : {
+  proper_name : {
     id : 4,
     regex : /\{.{1,}\}/
+  },
+  non_verbal : {
+    id : 5,
+    regex : /\[[\D]{1,}\]/
   }
 }
 
@@ -92,8 +116,10 @@ const getTokenTypeFromToken = (text:string):number => {
     return TOKEN_TYPES.pause.id
   } else if (text.match(TOKEN_TYPES.delimitier.regex) !== null) {
     return TOKEN_TYPES.delimitier.id
-  } else if(text.match(TOKEN_TYPES.propper_name.regex) !== null){
-    return TOKEN_TYPES.propper_name.id
+  } else if(text.match(TOKEN_TYPES.proper_name.regex) !== null){
+    return TOKEN_TYPES.proper_name.id
+  } else if(text.match(TOKEN_TYPES.non_verbal.regex) !== null){
+    return TOKEN_TYPES.non_verbal.id
   }else{
     return TOKEN_TYPES.unknown.id
   }
@@ -165,7 +191,7 @@ const getTiers = original => {
     .filter({ '#name' : 'basic-body' })
     .value()[0].tier
 
-  const tiers = tiers_with_comments.filter(t => t.$.category != 'c')
+  const tiers = tiers_with_comments.filter(t => t.$.category === 'v')
   return tiers
 }
 
@@ -179,40 +205,9 @@ const markFragmentsInTokens = tokens => {
 
 // START
 
-const fnames = [
-  '01_LE_V2',
-  '09_MH_V2',
-  '17_CR_V2',
-  '25_IK_V2.fln',
-  '02_BZ_V2',
-  '10_LE3_V2',
-  '18_ST_V2',
-  '26_KT_V2',
-  '03_ME_V2',
-  '11_AB_V2',
-  '19_PI_V2',
-  '27_AP_V2',
-  '04_LE2_V2',
-  '12_WS_V2',
-  '20_MH2_V2',
-  '28_CT_V2',
-  '05_AG_V2',
-  '13_MS_V1',
-  '21_SV_V2',
-  '29_AP2_V2',
-  '06_MK_V2',
-  '14_JN_V2',
-  '22_HK_V2',
-  '30_DS_V2',
-  '07_MU_V2_kopie',
-  '15_MP_V2',
-  '23_KL_V2',
-  '31_AF_V2',
-  '08_EE_V2',
-  '16_KK_V2',
-  '24_DH_V2',
-  '32_AS_V2'
-]
+const fnames = fs.readdirSync(path.join(__dirname, '/data/original'))
+  .filter(x => x !== '.DS_Store')
+  .map(v => v.split('.')[0])
 
 _(fnames).each((fname) => {
   var originalXML, orthographicXML
@@ -220,6 +215,8 @@ _(fnames).each((fname) => {
     originalXML     = fs.readFileSync(__dirname + `/data/original/${fname}.exb`).toString()
     orthographicXML = fs.readFileSync(__dirname + `/data/ortho/${fname}.fln`).toString()
   }catch(e){
+    console.log('could not find a file:')
+    console.log(e)
     return
   }
   return Promise.all([
@@ -227,6 +224,8 @@ _(fnames).each((fname) => {
     parseXML(orthographicXML)
   ])
   .then(([original, orthographic]) => {
+
+    console.log(`---- PROCESSING ${fname}`)
 
     var originalTimelineByTLI = getOriginalTimelineByTLI(original)
 
@@ -260,21 +259,31 @@ _(fnames).each((fname) => {
 
       // the event ends with a whitespace => the last token is not interrupted/split between events
       // => return tokenized event
-      if (e.event_text && e.event_text.slice(-1) === ' '){
+      if (
+        e.event_text && (
+          e.event_text.slice(-1) === ' '
+          || e.event_text.slice(-1) === ','
+          || e.event_text.slice(-1) === ']'
+        )
+      ){
         return clone(e)
 
       // it’s interrupted (i.e. the last word is incomplete)
-      // => descend into next event, and apend its text
+      // => descend into next event, and append its text
       // to the current token text
       }else{
         e.tokens = e.tokens.map((token, ti) => {
           // the last event token
-          if (ti+1 == e.tokens.length) {
+          if (ti+1 == e.tokens.length && l[i+1] !== undefined) {
             var next                     = parseEvent(l[i+1], l, i+1, i)
             l[i+1].skip_first            = true
-            e.next_token                 = next.tokens[0]
-            l[i+1].tokens[0].fragment_of = i
-            token.text                   = token.text + next.tokens[0].text
+            if (l[i+1].tokens[0] !== undefined) {
+              e.next_token                 = next.tokens[0]
+              l[i+1].tokens[0].fragment_of = i
+              token.text                   = token.text + next.tokens[0].text
+            }else{
+              console.log('l[i+1].tokens[0] === undefined', l[i+1])
+            }
             // console.log('interrupted:', token.text, 'next:', l[i+1].tokens)
             // console.log('l[i+1].tokens[0].fragment_of',i+1,l[i+1].tokens[0].fragment_of);
             return token
@@ -287,7 +296,10 @@ _(fnames).each((fname) => {
     }
 
     const joinEvents = (events) => {
-      return _(events).map((e, i) => parseEvent(e, events, i)).value()
+      return _(events)
+        .map((e, i) => parseEvent(e, events, i))
+        .filter()
+        .value()
     }
 
     const originalEventTokensBySpeaker = _(originalTiers).map((tier:any) => {
@@ -341,7 +353,8 @@ _(fnames).each((fname) => {
                   if (orthoAtIndex && orthoAtIndex.$) {
                     // log discrepancies
                     if (orthoAtIndex._ != t.text) {
-                      console.error('disconnect', t.text, orthoAtIndex._, '\neventTokenIndex', eventTokenIndex, 'nonWordTokenIndex', nonWordTokenIndex, 'orthoAtIndex._', tokenIndex +1 , speakerShorthand, eventOrthographicContributionWords.map(x => x._), event.tokens.map(x => x.text))
+                      // console.error('disconnect', t.text, orthoAtIndex._, '\neventTokenIndex', eventTokenIndex, 'nonWordTokenIndex', nonWordTokenIndex, 'orthoAtIndex._', tokenIndex +1 , speakerShorthand, eventOrthographicContributionWords.map(x => x._), event.tokens.map(x => x.text))
+                      // console.info(fname, 'disconnect', t.text, orthoAtIndex._)
                     }
                     return orthoAtIndex.$.n
                   }else{
@@ -369,9 +382,10 @@ _(fnames).each((fname) => {
 
     // var [tokens_words_only, tokens_non_words] = clone(_.partition(tokens, isWordToken))
     // log(orthoBySpeakerAndStartTime)
-    log(speakersWithEventsWithTokens)
+    // log(speakersWithEventsWithTokens)
 
     dao.writeTokens(_(speakersWithEventsWithTokens).flattenDeep().value())
+    .catch(e => console.log(e))
 
     // fs.writeFileSync(`./data/output/${fname}.csv`, speakersWithEventsWithTokens.map((x) => {
     //   return _(x).toArray().value().join(',')

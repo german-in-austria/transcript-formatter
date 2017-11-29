@@ -41,8 +41,18 @@ export default {
           fragment_of = EXCLUDED.fragment_of,
           token_type_id = EXCLUDED.token_type_id;
     `, values))
-
-    console.log(dbresult)
+    .catch(e => {
+      console.log(values[0][8])
+      console.log(_(values)
+        .groupBy(x => `${x[8]}-${x[1]}-${x[0]}`)
+        .filter(x => x.length > 1)
+        .value()
+      )
+      console.log(e)
+    })
+    if (dbresult && dbresult.length) {
+      console.log(dbresult)
+    }
     return dbresult
 
   }
