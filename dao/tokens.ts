@@ -1,10 +1,9 @@
-import * as pgp from 'pg-promise'
-import * as _ from 'lodash'
+import * as _      from 'lodash'
 import * as format from 'pg-format'
+import db          from './connection'
+import SQL         from 'sql-template-strings'
 
-const db = pgp()('postgres://postgres:password@localhost:5432/postgres')
-
-type token = {
+interface Itoken {
   text : string,
   ortho : string | null,
   speaker : string,
@@ -19,33 +18,41 @@ type token = {
 export default {
   async writeTokens(tokens){
 
-    var values = _(tokens).map(t => _(t).toArray().value()).value()
+    const values = _(tokens).map((t) => _(t).toArray().value()).value()
 
-    const dbresult = await db.query(format(`INSERT INTO
+    const dbresult = await db.query(format(`
+      INSERT INTO
       transcript.token(
         token_id,
         speaker,
         text,
         ortho,
         fragment_of,
+        sequence_in_sentence,
+        sentence_id,
         event_id,
         start_timepoint,
         end_timepoint,
-        transcript_name,
-        token_type_id)
+        transcript_id,
+        token_type_id,
+        likely_error
+      )
       VALUES %L
-      ON CONFLICT (token_id, speaker, transcript_name) DO UPDATE
+      ON CONFLICT (token_id, speaker, transcript_id) DO UPDATE
         SET
           text = EXCLUDED.text,
           ortho = EXCLUDED.ortho,
           fragment_of = EXCLUDED.fragment_of,
-          token_type_id = EXCLUDED.token_type_id;
+          sequence_in_sentence = EXCLUDED.sequence_in_sentence,
+          token_type_id = EXCLUDED.token_type_id,
+          likely_error = EXCLUDED.likely_error,
+          sentence_id = EXCLUDED.sentence_id;
     `, values))
-    .catch(e => {
+    .catch((e) => {
       console.log(values[0][8])
       console.log(_(values)
-        .groupBy(x => `${x[8]}-${x[1]}-${x[0]}`)
-        .filter(x => x.length > 1)
+        .groupBy((x) => `${x[8]}-${x[1]}-${x[0]}`)
+        .filter((x) => x.length > 1)
         .value()
       )
       console.log(e)
