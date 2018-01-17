@@ -1,7 +1,7 @@
 import * as _      from 'lodash'
 import * as format from 'pg-format'
-import db          from './connection'
 import SQL         from 'sql-template-strings'
+import db          from './connection'
 
 interface Itoken {
   text : string,
@@ -26,13 +26,12 @@ export default {
         token_id,
         speaker,
         text,
+        text_in_ortho,
         ortho,
         fragment_of,
         sequence_in_sentence,
         sentence_id,
         event_id,
-        start_timepoint,
-        end_timepoint,
         transcript_id,
         token_type_id,
         likely_error
@@ -41,6 +40,7 @@ export default {
       ON CONFLICT (token_id, speaker, transcript_id) DO UPDATE
         SET
           text = EXCLUDED.text,
+          text_in_ortho = EXCLUDED.text,
           ortho = EXCLUDED.ortho,
           fragment_of = EXCLUDED.fragment_of,
           sequence_in_sentence = EXCLUDED.sequence_in_sentence,

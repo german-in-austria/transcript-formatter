@@ -15,7 +15,8 @@
       "variable-name": false,
       "import-spacing": false,
       "semicolon": false,
-      "trailing-comma": false
+      "trailing-comma": false,
+      "object-literal-shorthand": false
     },
     "rulesDirectory": []
 }
